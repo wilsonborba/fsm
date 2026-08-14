@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+VENV_DIR="$ROOT_DIR/.venv"
+ENV_FILE="$ROOT_DIR/.env"
+PYTHON_BIN=${PYTHON_BIN:-python3}
+SERVICE_NAME="fsm-application"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+CURRENT_USER=$(id -un)
+CURRENT_GROUP=$(id -gn)
+
+log() {
+  printf '[fsm-install] %s\n' "$1"
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'Missing required command: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+generate_env() {
+  local generated_key
+  generated_key=$($PYTHON_BIN - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)
+
+  cat > "$ENV_FILE" <<EOF
+FSM_HOST=0.0.0.0
+FSM_PORT=8484
+FSM_APP_KEYS={"default":"${generated_key}"}
+EOF
+
+  log "Generated .env with default app 'default'."
+  log "Generated API key: ${generated_key}"
+}
+
+install_systemd_service() {
+  local host port
+  host=$(grep '^FSM_HOST=' "$ENV_FILE" | cut -d= -f2-)
+  port=$(grep '^FSM_PORT=' "$ENV_FILE" | cut -d= -f2-)
+
+  sudo tee "$SERVICE_FILE" >/dev/null <<EOF
+[Unit]
+Description=FSM Application Service
+After=network.target
+
+[Service]
+Type=simple
+User=${CURRENT_USER}
+Group=${CURRENT_GROUP}
+WorkingDirectory=${ROOT_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${VENV_DIR}/bin/python -m uvicorn src.main:app --host ${host} --port ${port}
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=027
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable "$SERVICE_NAME"
+  sudo systemctl restart "$SERVICE_NAME"
+}
+
+configure_ufw() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    log "ufw not installed; skipping firewall configuration."
+    return
+  fi
+
+  if ! sudo ufw status | grep -q 'Status: active'; then
+    log "ufw installed but inactive; skipping firewall configuration."
+    return
+  fi
+
+  local port
+  port=$(grep '^FSM_PORT=' "$ENV_FILE" | cut -d= -f2-)
+  sudo ufw allow proto tcp from 10.0.0.0/8 to any port "$port" comment 'fsm-application-lan-10' >/dev/null || true
+  sudo ufw allow proto tcp from 172.16.0.0/12 to any port "$port" comment 'fsm-application-lan-172' >/dev/null || true
+  sudo ufw allow proto tcp from 192.168.0.0/16 to any port "$port" comment 'fsm-application-lan-192' >/dev/null || true
+  sudo ufw deny "$port"/tcp comment 'fsm-application-deny-public' >/dev/null || true
+  log "ufw LAN-only rules ensured for port ${port}."
+}
+
+run_healthcheck() {
+  local port
+  port=$(grep '^FSM_PORT=' "$ENV_FILE" | cut -d= -f2-)
+  sleep 1
+  "$VENV_DIR/bin/python" - <<PY
+from urllib.request import urlopen
+port = ${port}
+with urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as response:
+    print(response.read().decode())
+PY
+}
+
+main() {
+  require_command "$PYTHON_BIN"
+  require_command sudo
+  require_command systemctl
+
+  log "Creating Python virtual environment."
+  if [ ! -d "$VENV_DIR" ]; then
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+  fi
+
+  log "Installing Python dependencies."
+  "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
+  "$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt" >/dev/null
+
+  mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
+
+  if [ ! -f "$ENV_FILE" ]; then
+    generate_env
+  else
+    log "Using existing .env file."
+  fi
+
+  log "Installing systemd unit."
+  install_systemd_service
+
+  log "Configuring firewall when available."
+  configure_ufw
+
+  log "Running health check."
+  run_healthcheck
+
+  log "Installation complete."
+  log "Service name: ${SERVICE_NAME}"
+}
+
+main "$@"
+
