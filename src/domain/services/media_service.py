@@ -13,7 +13,13 @@ class MediaService:
         self.storage_adapter = storage_adapter
         self.settings = settings
 
-    def upload_media(self, app_slug: str, album: str, upload_file: UploadFile) -> MediaUploadResponse:
+    def upload_media(
+        self,
+        app_slug: str,
+        album: str,
+        upload_file: UploadFile,
+        force_duplicate: bool = False,
+    ) -> MediaUploadResponse:
         normalized_app = normalize_slug(app_slug)
         normalized_album = normalize_slug(album)
         if upload_file.content_type not in self.settings.allowed_mime_types:
@@ -22,7 +28,9 @@ class MediaService:
                 detail=f"Unsupported media type: {upload_file.content_type}",
             )
         try:
-            media_item = self.storage_adapter.save_upload(normalized_app, normalized_album, upload_file)
+            media_item = self.storage_adapter.save_upload(
+                normalized_app, normalized_album, upload_file, force_duplicate=force_duplicate
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return MediaUploadResponse(item=media_item)

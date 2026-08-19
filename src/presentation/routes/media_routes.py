@@ -29,9 +29,10 @@ def upload_media(
     app: str,
     album: str = Form(...),
     file: UploadFile = File(...),
+    force: bool = Form(False),
     _: AuthenticatedApp = Depends(_authenticated_app_for_route),
 ) -> MediaUploadResponse:
-    return request.app.state.media_service.upload_media(app, album, file)
+    return request.app.state.media_service.upload_media(app, album, file, force_duplicate=force)
 
 
 @router.get("/{app}/media/{key}")
