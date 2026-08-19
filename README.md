@@ -6,7 +6,7 @@ It exposes a small HTTP API for backend applications that need to upload, read, 
 ## Highlights
 
 - Python + FastAPI, no containers.
-- Local disk storage with JSON index files.
+- Content-addressable local storage (SQLite index) with automatic cross-app deduplication by SHA-256; opt out per upload with `force`.
 - Static API key authentication per consumer application.
 - `systemd`-managed deployment through a single `./install` script.
 - Safe default behavior for private network usage.
@@ -68,7 +68,7 @@ Main non-secret defaults live in `src/core/settings.py`.
 Authentication uses `Authorization: Bearer <api-key>`.
 
 - `POST /{app}/media`
-  - multipart fields: `album`, `file`
+  - multipart fields: `album`, `file`, `force` (optional, default `false`; forces an independent physical copy instead of deduplicating against identical content already stored)
 - `GET /{app}/media/{key}`
 - `GET /{app}/albums/{album}`
 - `DELETE /{app}/media/{key}`

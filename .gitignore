@@ -11,4 +11,6 @@ __pycache__/
 data/
 storage/
 runtime/
+build/
+*.egg-info/
 

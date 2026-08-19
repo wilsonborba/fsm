@@ -115,7 +115,7 @@ main() {
 
   log "Installing Python dependencies."
   "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-  "$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt" >/dev/null
+  "$VENV_DIR/bin/pip" install "$ROOT_DIR" >/dev/null
 
   mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
 
