@@ -94,12 +94,23 @@ configure_ufw() {
 run_healthcheck() {
   local port
   port=$(grep '^FSM_PORT=' "$ENV_FILE" | cut -d= -f2-)
-  sleep 1
   "$VENV_DIR/bin/python" - <<PY
+import time
+from urllib.error import URLError
 from urllib.request import urlopen
+
 port = ${port}
-with urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as response:
-    print(response.read().decode())
+last_error = None
+for _ in range(10):
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as response:
+            print(response.read().decode())
+            break
+    except URLError as exc:
+        last_error = exc
+        time.sleep(1)
+else:
+    raise SystemExit(f"health check failed: {last_error}")
 PY
 }
 
@@ -115,7 +126,7 @@ main() {
 
   log "Installing Python dependencies."
   "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-  "$VENV_DIR/bin/pip" install "$ROOT_DIR" >/dev/null
+  "$VENV_DIR/bin/pip" install -e "$ROOT_DIR" >/dev/null
 
   mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
 
