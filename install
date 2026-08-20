@@ -33,6 +33,20 @@ PY
 FSM_HOST=0.0.0.0
 FSM_PORT=8484
 FSM_APP_KEYS={"default":"${generated_key}"}
+
+# Comma-separated MIME allowlist for the media routes; empty = accept any type.
+FSM_ALLOWED_MIME_TYPES=
+# Shared upload size cap (bytes) for both the media and S3-compatible routes.
+FSM_MAX_UPLOAD_BYTES=104857600
+# When true, FSM_MAX_UPLOAD_BYTES is ignored entirely for both route sets.
+FSM_UNLIMITED_UPLOADS=false
+
+# S3-compatible API credentials: maps an access key id to its secret and the
+# app slug (bucket) it is allowed to use. One entry per consumer application.
+# Empty by default -- add an entry here (or edit .env directly) per consumer app.
+FSM_S3_CREDENTIALS={}
+FSM_S3_REGION=us-east-1
+FSM_S3_MAX_EXPIRES_SECONDS=604800
 EOF
 
   log "Generated .env with default app 'default'."

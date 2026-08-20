@@ -22,7 +22,7 @@ class MediaService:
     ) -> MediaUploadResponse:
         normalized_app = normalize_slug(app_slug)
         normalized_album = normalize_slug(album)
-        if upload_file.content_type not in self.settings.allowed_mime_types:
+        if self.settings.allowed_mime_types and upload_file.content_type not in self.settings.allowed_mime_types:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported media type: {upload_file.content_type}",
