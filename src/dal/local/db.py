@@ -29,6 +29,18 @@ CREATE TABLE IF NOT EXISTS media_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_items_app_album ON media_items (app, album);
+
+CREATE TABLE IF NOT EXISTS objects (
+    app TEXT NOT NULL,
+    key TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    content_type TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app, key)
+);
 """
 
 
