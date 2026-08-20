@@ -87,7 +87,7 @@ class LocalStorageAdapter:
                 if not chunk:
                     break
                 total_size += len(chunk)
-                if total_size > self.settings.max_upload_bytes:
+                if not self.settings.unlimited_uploads and total_size > self.settings.max_upload_bytes:
                     destination.close()
                     temp_path.unlink(missing_ok=True)
                     raise ValueError(
