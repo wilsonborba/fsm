@@ -79,8 +79,37 @@ def test_app_key_is_scoped_to_route_app(client):
     assert response.status_code == 401
 
 
-def test_rejects_unsupported_media_type(client):
+def test_accepts_any_media_type_by_default(client):
     response = client.post(
+        "/default/media",
+        headers={"Authorization": "Bearer secret-key"},
+        data={"album": "sample"},
+        files={"file": ("file.txt", b"hello", "text/plain")},
+    )
+    assert response.status_code == 200
+
+
+def test_rejects_unsupported_media_type_when_allowlist_configured(tmp_path, monkeypatch):
+    import json
+    import sys
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    root_dir = Path(__file__).resolve().parents[1]
+    if str(root_dir) not in sys.path:
+        sys.path.insert(0, str(root_dir))
+
+    monkeypatch.setenv("FSM_STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("FSM_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("FSM_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("FSM_APP_KEYS", json.dumps({"default": "secret-key"}))
+    monkeypatch.setenv("FSM_ALLOWED_MIME_TYPES", "image/png")
+
+    from src.app import create_app
+
+    restricted_client = TestClient(create_app())
+    response = restricted_client.post(
         "/default/media",
         headers={"Authorization": "Bearer secret-key"},
         data={"album": "sample"},
