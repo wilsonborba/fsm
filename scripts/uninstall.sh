@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SERVICE_NAME="fsm-application"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 PURGE_DATA=false
@@ -48,7 +48,8 @@ main() {
   remove_ufw_rules
 
   if [ "$PURGE_DATA" = true ]; then
-    rm -rf "$ROOT_DIR/data" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
+    rm -f "$ROOT_DIR/src/dal/var"/*.db
+    rm -rf "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
     log "Removed data, storage and runtime directories."
   fi
 

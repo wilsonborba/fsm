@@ -85,7 +85,7 @@ def load_settings() -> Settings:
     load_dotenv(root_dir / ".env")
 
     storage_root = Path(os.getenv("FSM_STORAGE_ROOT", root_dir / "storage")).expanduser()
-    data_root = Path(os.getenv("FSM_DATA_ROOT", root_dir / "data")).expanduser()
+    data_root = Path(os.getenv("FSM_DATA_ROOT", root_dir / "src" / "dal" / "var")).expanduser()
     runtime_root = Path(os.getenv("FSM_RUNTIME_ROOT", root_dir / "runtime")).expanduser()
     allowed_mime_types_raw = os.getenv("FSM_ALLOWED_MIME_TYPES", "")
 
