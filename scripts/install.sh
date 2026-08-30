@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VENV_DIR="$ROOT_DIR/.venv"
 ENV_FILE="$ROOT_DIR/.env"
 PYTHON_BIN=${PYTHON_BIN:-python3}
@@ -142,7 +142,7 @@ main() {
   "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
   "$VENV_DIR/bin/pip" install -e "$ROOT_DIR" >/dev/null
 
-  mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
+  mkdir -p "$ROOT_DIR/src/dal/var" "$ROOT_DIR/storage" "$ROOT_DIR/runtime"
 
   if [ ! -f "$ENV_FILE" ]; then
     generate_env
