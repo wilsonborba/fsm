@@ -8,7 +8,8 @@ __pycache__/
 *.pyd
 .DS_Store
 .env
-data/
+src/dal/var/*.db
+!src/dal/var/.gitkeep
 storage/
 runtime/
 build/

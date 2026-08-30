@@ -9,7 +9,7 @@ It exposes a small HTTP API for backend applications that need to upload, read, 
 - Content-addressable local storage (SQLite index) with automatic cross-app deduplication by SHA-256; opt out per upload with `force`.
 - Static API key authentication per consumer application.
 - Minimal S3-compatible API (path-style, SigV4) alongside the media API, for apps that already speak `boto3`/`django-storages`.
-- `systemd`-managed deployment through a single `./install` script.
+- `systemd`-managed deployment through a single `scripts/install.sh` script.
 - Safe default behavior for private network usage.
 
 ## Project structure
@@ -18,6 +18,7 @@ It exposes a small HTTP API for backend applications that need to upload, read, 
 src/
 ├── core/
 ├── dal/local/
+├── dal/var/        # gitignored: sqlite index (fsm.db)
 ├── domain/models/
 ├── domain/services/
 ├── presentation/routes/
@@ -38,7 +39,7 @@ tests/
 ```bash
 git clone <your-repo-url>
 cd fsm
-./install
+./scripts/install.sh
 ```
 
 The install script:
@@ -127,8 +128,8 @@ journalctl -u fsm-application -f
 ## Uninstall
 
 ```bash
-./uninstall
+./scripts/uninstall.sh
 ```
 
-Use `./uninstall --purge-data` to also remove generated storage/runtime data.
+Use `./scripts/uninstall.sh --purge-data` to also remove generated storage/runtime data.
 
