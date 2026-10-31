@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 import socket
 import threading
 import time
+import tracemalloc
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import boto3
 import httpx
@@ -25,7 +31,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture()
-def live_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def live_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FSM_STORAGE_ROOT", str(tmp_path / "storage"))
     monkeypatch.setenv("FSM_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("FSM_RUNTIME_ROOT", str(tmp_path / "runtime"))
@@ -52,10 +58,15 @@ def live_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     else:
         raise RuntimeError("live server did not start in time")
 
-    yield f"http://127.0.0.1:{port}"
+    yield SimpleNamespace(url=f"http://127.0.0.1:{port}", app=app, tmp_path=tmp_path)
 
     server.should_exit = True
     thread.join(timeout=5)
+
+
+@pytest.fixture()
+def live_server(live_app) -> str:
+    return live_app.url
 
 
 def _s3_client(base_url: str, access_key_id: str = ACCESS_KEY_ID, secret_access_key: str = SECRET_ACCESS_KEY):
@@ -179,3 +190,90 @@ def test_unknown_access_key_rejected(live_server):
     with pytest.raises(ClientError) as exc_info:
         client.put_object(Bucket=BUCKET, Key="x.txt", Body=b"x")
     assert exc_info.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+
+
+def _tmp_files(live_app) -> list:
+    return list((live_app.tmp_path / "storage" / "tmp").iterdir())
+
+
+def test_large_object_round_trip(live_app):
+    s3 = _s3_client(live_app.url)
+    payload = os.urandom(8 * 1024 * 1024)
+
+    s3.put_object(Bucket=BUCKET, Key="large.bin", Body=payload)
+    response = s3.get_object(Bucket=BUCKET, Key="large.bin")
+
+    assert response["Body"].read() == payload
+    assert response["ContentLength"] == len(payload)
+    assert response["ETag"] == f'"{hashlib.sha256(payload).hexdigest()}"'
+    assert _tmp_files(live_app) == []
+
+
+def test_put_over_limit_is_rejected_and_leaves_no_temp_file(live_app, monkeypatch):
+    s3 = _s3_client(live_app.url)
+    settings = live_app.app.state.settings
+    monkeypatch.setattr(live_app.app.state.object_storage_adapter, "settings", replace(settings, max_upload_bytes=1024))
+
+    with pytest.raises(ClientError) as error:
+        s3.put_object(Bucket=BUCKET, Key="too-big.bin", Body=b"x" * 2048)
+
+    assert error.value.response["Error"]["Code"] == "EntityTooLarge"
+    assert _tmp_files(live_app) == []
+    with pytest.raises(ClientError):
+        s3.head_object(Bucket=BUCKET, Key="too-big.bin")
+
+
+def test_copy_over_limit_is_rejected(live_app, monkeypatch):
+    s3 = _s3_client(live_app.url)
+    s3.put_object(Bucket=BUCKET, Key="source.bin", Body=b"x" * 2048)
+    settings = live_app.app.state.settings
+    monkeypatch.setattr(live_app.app.state.object_storage_adapter, "settings", replace(settings, max_upload_bytes=1024))
+
+    with pytest.raises(ClientError) as error:
+        s3.copy_object(Bucket=BUCKET, Key="copy.bin", CopySource={"Bucket": BUCKET, "Key": "source.bin"})
+
+    assert error.value.response["Error"]["Code"] == "EntityTooLarge"
+    assert _tmp_files(live_app) == []
+
+
+def test_get_does_not_load_the_object_into_memory(live_app, monkeypatch):
+    s3 = _s3_client(live_app.url)
+    s3.put_object(Bucket=BUCKET, Key="streamed.bin", Body=b"streamed")
+
+    def fail_read_bytes(self):
+        raise AssertionError("object must not be loaded into memory")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+    assert s3.get_object(Bucket=BUCKET, Key="streamed.bin")["Body"].read() == b"streamed"
+
+
+def test_spool_memory_stays_far_below_object_size(live_app):
+    adapter = live_app.app.state.object_storage_adapter
+    block = b"x" * (1024 * 1024)
+
+    async def blocks():
+        for _ in range(32):
+            yield block
+
+    tracemalloc.start()
+    spooled = asyncio.run(adapter.spool(blocks()))
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert spooled.size_bytes == 32 * 1024 * 1024
+    assert spooled.checksum_sha256 == hashlib.sha256(block * 32).hexdigest()
+    assert peak < 2 * 1024 * 1024
+    spooled.path.unlink()
+
+
+def test_spool_removes_temp_file_when_the_stream_fails(live_app):
+    adapter = live_app.app.state.object_storage_adapter
+
+    async def broken():
+        yield b"partial"
+        raise ConnectionError("client disconnected")
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(adapter.spool(broken()))
+
+    assert _tmp_files(live_app) == []
