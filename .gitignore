@@ -8,7 +8,10 @@ __pycache__/
 *.pyd
 .DS_Store
 .env
+.env.bak*
 src/dal/var/*.db
+src/dal/var/*.db-shm
+src/dal/var/*.db-wal
 !src/dal/var/.gitkeep
 storage/
 runtime/

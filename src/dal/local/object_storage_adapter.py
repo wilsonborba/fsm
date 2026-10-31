@@ -4,12 +4,13 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Optional
+from typing import AsyncIterable, AsyncIterator, List, Optional
 from uuid import uuid4
 
 from src.core.settings import Settings
+from src.core.utils.files import STREAM_BLOCK_BYTES
 from src.dal.local.db import connect
-from src.domain.models.object_models import ObjectItem
+from src.domain.models.object_models import ObjectItem, SpooledObject
 
 
 class ObjectStorageAdapter:
@@ -46,21 +47,39 @@ class ObjectStorageAdapter:
             updated_at=row["updated_at"],
         )
 
-    def put_object(self, app: str, key: str, content_type: str, data: bytes) -> ObjectItem:
-        if not self.settings.unlimited_uploads and len(data) > self.settings.max_upload_bytes:
-            raise ValueError(f"Upload exceeds configured limit of {self.settings.max_upload_bytes} bytes")
+    async def spool(self, chunks: AsyncIterable[bytes]) -> SpooledObject:
+        """Writes `chunks` to a temp file block by block, so that the object
+        never sits in RAM. The temp file is removed on any failure, including
+        a limit breach or a client disconnect."""
+        temp_dir = self.storage_root / "tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        sha256 = hashlib.sha256()
+        size_bytes = 0
+        with NamedTemporaryFile("wb", delete=False, dir=str(temp_dir)) as destination:
+            temp_path = Path(destination.name)
+            try:
+                async for chunk in chunks:
+                    size_bytes += len(chunk)
+                    if not self.settings.unlimited_uploads and size_bytes > self.settings.max_upload_bytes:
+                        raise ValueError(
+                            f"Upload exceeds configured limit of {self.settings.max_upload_bytes} bytes"
+                        )
+                    sha256.update(chunk)
+                    destination.write(chunk)
+            except BaseException:
+                destination.close()
+                temp_path.unlink(missing_ok=True)
+                raise
+        return SpooledObject(path=temp_path, size_bytes=size_bytes, checksum_sha256=sha256.hexdigest())
 
+    def put_object(self, app: str, key: str, content_type: str, spooled: SpooledObject) -> ObjectItem:
         now = datetime.now(timezone.utc).isoformat()
-        checksum = hashlib.sha256(data).hexdigest()
+        checksum = spooled.checksum_sha256
+        size_bytes = spooled.size_bytes
+        temp_path = spooled.path
         relative_path = self._relative_path_for(app, key)
         absolute_path = self.storage_root / relative_path
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
-
-        temp_dir = self.storage_root / "tmp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile("wb", delete=False, dir=str(temp_dir)) as destination:
-            temp_path = Path(destination.name)
-            destination.write(data)
 
         connection = self._connect()
         try:
@@ -75,13 +94,13 @@ class ObjectStorageAdapter:
                 connection.execute(
                     "UPDATE objects SET relative_path = ?, size_bytes = ?, content_type = ?,"
                     " content_hash = ?, updated_at = ? WHERE app = ? AND key = ?",
-                    (str(relative_path), len(data), content_type, checksum, now, app, key),
+                    (str(relative_path), size_bytes, content_type, checksum, now, app, key),
                 )
             else:
                 connection.execute(
                     "INSERT INTO objects (app, key, relative_path, size_bytes, content_type,"
                     " content_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (app, key, str(relative_path), len(data), content_type, checksum, now, now),
+                    (app, key, str(relative_path), size_bytes, content_type, checksum, now, now),
                 )
             connection.commit()
         except Exception:
@@ -98,7 +117,7 @@ class ObjectStorageAdapter:
             app=app,
             key=key,
             content_type=content_type,
-            size_bytes=len(data),
+            size_bytes=size_bytes,
             checksum_sha256=checksum,
             relative_path=str(relative_path),
             created_at=now,
@@ -145,12 +164,18 @@ class ObjectStorageAdapter:
     def delete_objects(self, app: str, keys: List[str]) -> List[str]:
         return [key for key in keys if self.delete_object(app, key)]
 
-    def copy_object(self, app: str, source_key: str, dest_key: str) -> Optional[ObjectItem]:
+    async def copy_object(self, app: str, source_key: str, dest_key: str) -> Optional[ObjectItem]:
         source = self.head_object(app, source_key)
         if source is None:
             return None
-        data = (self.storage_root / source.relative_path).read_bytes()
-        return self.put_object(app, dest_key, source.content_type, data)
+        spooled = await self.spool(self._file_chunks(self.storage_root / source.relative_path))
+        return self.put_object(app, dest_key, source.content_type, spooled)
+
+    @staticmethod
+    async def _file_chunks(path: Path) -> AsyncIterator[bytes]:
+        with path.open("rb") as source:
+            while chunk := source.read(STREAM_BLOCK_BYTES):
+                yield chunk
 
     def list_objects(self, app: str, prefix: str = "") -> List[ObjectItem]:
         connection = self._connect()
