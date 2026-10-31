@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import AsyncIterable, List
 
 from src.core.utils.files import normalize_object_key, normalize_slug
 from src.dal.local.object_storage_adapter import ObjectStorageAdapter
@@ -18,12 +18,15 @@ class S3Service:
             raise S3ApiError(403, "AccessDenied", "Credentials are not authorized for this bucket")
         return normalized_bucket
 
-    def put_object(self, app: str, key: str, content_type: str, data: bytes) -> ObjectItem:
+    async def put_object(self, app: str, key: str, content_type: str, chunks: AsyncIterable[bytes]) -> ObjectItem:
         normalized_key = normalize_object_key(key)
         try:
-            return self.storage_adapter.put_object(app, normalized_key, content_type or "application/octet-stream", data)
+            spooled = await self.storage_adapter.spool(chunks)
         except ValueError as exc:
             raise S3ApiError(400, "EntityTooLarge", str(exc)) from exc
+        return self.storage_adapter.put_object(
+            app, normalized_key, content_type or "application/octet-stream", spooled
+        )
 
     def head_object(self, app: str, key: str) -> ObjectItem:
         item = self.storage_adapter.head_object(app, normalize_object_key(key))
@@ -38,10 +41,13 @@ class S3Service:
         normalized_keys = [normalize_object_key(key) for key in keys]
         return self.storage_adapter.delete_objects(app, normalized_keys)
 
-    def copy_object(self, app: str, source_key: str, dest_key: str) -> ObjectItem:
-        item = self.storage_adapter.copy_object(
-            app, normalize_object_key(source_key), normalize_object_key(dest_key)
-        )
+    async def copy_object(self, app: str, source_key: str, dest_key: str) -> ObjectItem:
+        try:
+            item = await self.storage_adapter.copy_object(
+                app, normalize_object_key(source_key), normalize_object_key(dest_key)
+            )
+        except ValueError as exc:
+            raise S3ApiError(400, "EntityTooLarge", str(exc)) from exc
         if item is None:
             raise S3ApiError(404, "NoSuchKey", "Source object not found")
         return item

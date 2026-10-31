@@ -6,6 +6,8 @@ from pathlib import PurePosixPath
 
 _SLUG_PATTERN = re.compile(r"[^a-zA-Z0-9._-]+")
 
+STREAM_BLOCK_BYTES = 1024 * 1024
+
 
 def normalize_slug(value: str) -> str:
     cleaned = _SLUG_PATTERN.sub("-", value.strip().lower()).strip("-._")
