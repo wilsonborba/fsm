@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import AsyncIterator
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, UploadFile
+from fastapi.responses import FileResponse
 
 from src.core.utils import s3_xml
+from src.core.utils.files import STREAM_BLOCK_BYTES
 from src.domain.services.s3_errors import S3ApiError
 
 
@@ -22,6 +25,11 @@ def _authenticate(request: Request, auth_service) -> str:
     if "X-Amz-Signature" in request.query_params:
         return auth_service.verify_query_auth(request.method, request.url.path, query_params, headers)
     return auth_service.verify_header_auth(request.method, request.url.path, query_params, headers)
+
+
+async def _upload_chunks(upload_file: UploadFile) -> AsyncIterator[bytes]:
+    while chunk := await upload_file.read(STREAM_BLOCK_BYTES):
+        yield chunk
 
 
 @router.post("/{bucket}")
@@ -57,8 +65,7 @@ async def post_bucket(bucket: str, request: Request) -> Response:
     if upload_file is None:
         raise S3ApiError(400, "InvalidRequest", "Missing file field in multipart upload")
 
-    data = await upload_file.read()
-    app_slug = auth_service.verify_post_policy(fields, len(data), bucket)
+    app_slug = auth_service.verify_post_policy(fields, upload_file.size, bucket)
     app_slug = s3_service.require_bucket_matches_app(bucket, app_slug)
 
     key = fields.get("key") or fields.get("Key")
@@ -66,7 +73,7 @@ async def post_bucket(bucket: str, request: Request) -> Response:
         raise S3ApiError(400, "InvalidRequest", "Missing key field in multipart upload")
 
     content_type = fields.get("Content-Type") or fields.get("content-type") or upload_file.content_type
-    s3_service.put_object(app_slug, key, content_type, data)
+    await s3_service.put_object(app_slug, key, content_type, _upload_chunks(upload_file))
     return Response(status_code=204)
 
 
@@ -115,9 +122,8 @@ async def get_object(bucket: str, key: str, request: Request) -> Response:
 
     item = s3_service.get_object(app_slug, key)
     absolute_path = request.app.state.object_storage_adapter.absolute_path_for_item(item)
-    data = absolute_path.read_bytes()
-    return Response(
-        content=data,
+    return FileResponse(
+        absolute_path,
         media_type=item.content_type,
         headers={
             "ETag": f'"{item.checksum_sha256}"',
@@ -152,10 +158,9 @@ async def put_object(bucket: str, key: str, request: Request) -> Response:
     if copy_source:
         source_path = unquote(copy_source).lstrip("/")
         _, _, source_key = source_path.partition("/")
-        item = s3_service.copy_object(app_slug, source_key, key)
+        item = await s3_service.copy_object(app_slug, source_key, key)
         return Response(content=s3_xml.copy_object_result_xml(item), media_type="application/xml")
 
-    body = await request.body()
     content_type = request.headers.get("content-type", "application/octet-stream")
-    item = s3_service.put_object(app_slug, key, content_type, body)
+    item = await s3_service.put_object(app_slug, key, content_type, request.stream())
     return Response(status_code=200, headers={"ETag": f'"{item.checksum_sha256}"'})
